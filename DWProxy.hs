@@ -13,7 +13,7 @@ import System.Environment (getArgs)
 import System.FilePath ((</>))
 import Network.Socket.ByteString (sendAll, recv)
 import Network.Socket hiding (send, recv)
-import Control.Concurrent.Async (async, waitAnyCancel)
+import Control.Concurrent.Async (async, waitAnyCatchCancel)
 import Control.Exception as E
 import Control.Monad (when, forM_, forever)
 import Data.Attoparsec.ByteString
@@ -288,6 +288,6 @@ main = do
           let c = Config client server db mv pf
           c2s' <- async $ c2s c ""
           s2c' <- async $ s2c c ""
-          waitAnyCancel [c2s', s2c']
+          waitAnyCatchCancel [c2s', s2c']
     _ -> putStrLn "Usage: dwroute <quow plugins>"
   pure ()
