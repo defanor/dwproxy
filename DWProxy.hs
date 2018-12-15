@@ -24,6 +24,7 @@ import Data.Either (rights)
 import Control.Applicative
 import Data.Aeson (FromJSON, decodeStrict)
 import GHC.Generics (Generic)
+import Data.Monoid
 
 
 type RoomID = T.Text
@@ -155,6 +156,25 @@ c2s c leftover = do
             , "\255\240"
             ]
         Telnet other -> sendAll (cServer c) $ BS.cons '\255' other
+        ShopSearch query -> do
+          curRoom <- currentRoom <$> readMVar (connState c)
+          shops <- SQLite.query (dbConn c)
+            ("select room_id, room_short, item_name, sale_price from shop_items"
+             <> " natural inner join rooms where item_name like ?")
+            (SQLite.Only (concat ["%", query, "%"]))
+            :: IO [(T.Text, T.Text, T.Text, T.Text)]
+          -- cleanup the routes
+          modifyMVar_ (connState c) $ \cst -> pure $ cst { routeOptions = [] }
+          forM_ shops $ \(roomI, roomS, item, price) -> do
+            let p = curRoom >>=
+                    \cr -> either (const Nothing) Just (findPath (cPF c) cr roomI)
+            n <- case p of
+              Nothing -> pure " "
+              Just p' -> modifyMVar (connState c) $ \cst ->
+                pure (cst { routeOptions = routeOptions cst ++ [TE.encodeUtf8 p'] }
+                     , show (length $ routeOptions cst))
+            sendAll (cClient c) $ TE.encodeUtf8 $
+              T.concat ["[", T.pack n, "] ", roomS, ": ", item, " for ", price, "\r\n"]
         SpeedWalk f t -> do
           cs <- readMVar (connState c)
           case (T.pack <$> f) <|> currentRoom cs of
@@ -173,11 +193,20 @@ c2s c leftover = do
                     | from <- fromRooms, to <- toRooms ]
               case routes of
                 [] -> sendAll (cClient c) "No routes found\r\n"
+                [(_from, _to, p)] -> do
+                  sendAll (cServer c) $ BS.concat
+                    ["alias _speedwalk "
+                    , TE.encodeUtf8 p
+                    , "\r\n"
+                    , "_speedwalk"
+                    , "\r\n"
+                    ]
                 _ -> do
-                  sendAll (cClient c) "Routes found:\r\n"
                   forM_ (zip ([0..] :: [Int]) routes) $ \(n, (from, to, _)) ->
                     sendAll (cClient c) $
-                    BS.concat ["[", BS.pack (show n), "] ", from, " to ", to, "\r\n"]
+                    BS.concat ["[", BS.pack (show n), "] "
+                              , maybe "" (const $ from <> " to ") f
+                              , to, "\r\n"]
                   modifyMVar_ (connState c) $ \cst -> pure $
                     cst { routeOptions = map (\(_,_,route) -> TE.encodeUtf8 route) routes }
                   pure ()
@@ -186,7 +215,8 @@ c2s c leftover = do
           if length routes < n
             then sendAll (cClient c) "No such route"
             else sendAll (cServer c) $
-                 BS.concat ["alias _speedwalk ", routes !! n, "\r\n"]
+                 BS.concat ["alias _speedwalk ", routes !! n, "\r\n"
+                           , "_speedwalk", "\r\n"]
       c2s c d
 
 s2c :: Config -> BS.ByteString -> IO ()
@@ -214,6 +244,7 @@ s2c c leftover = do
 data Command = Telnet BS.ByteString
              | TelnetSN BS.ByteString
              | SpeedWalk (Maybe String) String
+             | ShopSearch String
              | RouteChoice Int
   deriving (Show)
 
@@ -243,8 +274,11 @@ pSpeedWalk = do
   to <- manyTill (notChar '\255') "\r\n"
   pure $ SpeedWalk from to
 
+pShopSearch :: Parser Command
+pShopSearch = ShopSearch <$> ("shop " *> manyTill (notChar '\255') "\r\n")
+
 pClientCommand :: Parser Command
-pClientCommand = pSpeedWalk <|> pRouteChoice
+pClientCommand = pSpeedWalk <|> pRouteChoice <|> pShopSearch
 
 pTelnetSN :: Parser Command
 pTelnetSN = do
@@ -288,6 +322,9 @@ main = do
           let c = Config client server db mv pf
           c2s' <- async $ c2s c ""
           s2c' <- async $ s2c c ""
-          waitAnyCatchCancel [c2s', s2c']
+          r <- waitAnyCatchCancel [c2s', s2c']
+          case r of
+            (_, Left e) -> print e
+            _ -> pure ()
     _ -> putStrLn "Usage: dwroute <quow plugins>"
   pure ()
