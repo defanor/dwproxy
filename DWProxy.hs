@@ -25,6 +25,7 @@ import Control.Applicative
 import Data.Aeson (FromJSON, decodeStrict)
 import GHC.Generics (Generic)
 import Data.Monoid
+import Data.List
 
 
 type RoomID = T.Text
@@ -92,16 +93,16 @@ pathFinder rooms exits =
       exitMap = HM.fromList $ map (\(Exit f t e) -> ((f, t), e)) exits
   in PF graph roomToNode nodeToRoom exitMap
 
-findPath :: PathFinder -> RoomID -> RoomID -> Either T.Text T.Text
+findPath :: PathFinder -> RoomID -> RoomID -> Either T.Text [T.Text]
 findPath pf from to =
   let route = sp (fromJust $ HM.lookup from $ pfRoomToNode pf)
               (fromJust $ HM.lookup to $ pfRoomToNode pf)
               (pfGraph pf)
   in case route of
-    Just path@(_:_) -> Right $ T.intercalate ";" $
+    Just path@(_:_) -> Right $
       mapMaybe (flip HM.lookup (pfExitMap pf)) $
       (\p -> zip p (tail p)) $ mapMaybe (flip HM.lookup $ pfNodeToRoom pf) path
-    Just [] -> Right "look"
+    Just [] -> Right ["look"]
     Nothing -> Left "No route found"
 
 mkServer :: IO Socket
@@ -133,6 +134,9 @@ showRoom r = TE.encodeUtf8 $ T.concat
   , T.pack (show $ roomX r), "x", T.pack (show $ roomY r)
   , ")"]
 
+routeBS :: [T.Text] -> BS.ByteString
+routeBS = TE.encodeUtf8 . T.intercalate ";"
+
 c2s :: Config -> BS.ByteString -> IO ()
 c2s c leftover = do
   cmd <- parseWith (recv (cClient c) 4096) pCommand leftover
@@ -159,22 +163,25 @@ c2s c leftover = do
         ShopSearch query -> do
           curRoom <- currentRoom <$> readMVar (connState c)
           shops <- SQLite.query (dbConn c)
-            ("select room_id, room_short, item_name, sale_price from shop_items"
+            ("select room_id, map_id, room_short, item_name, sale_price from shop_items"
              <> " natural inner join rooms where item_name like ?")
             (SQLite.Only (concat ["%", query, "%"]))
-            :: IO [(T.Text, T.Text, T.Text, T.Text)]
+            :: IO [(RoomID, Int, T.Text, T.Text, T.Text)]
           -- cleanup the routes
           modifyMVar_ (connState c) $ \cst -> pure $ cst { routeOptions = [] }
-          forM_ shops $ \(roomI, roomS, item, price) -> do
+          forM_ shops $ \(roomI, mapI, roomS, item, price) -> do
             let p = curRoom >>=
                     \cr -> either (const Nothing) Just (findPath (cPF c) cr roomI)
-            n <- case p of
-              Nothing -> pure " "
+            (n, l) <- case p of
+              Nothing -> pure (" ", "")
               Just p' -> modifyMVar (connState c) $ \cst ->
-                pure (cst { routeOptions = routeOptions cst ++ [TE.encodeUtf8 p'] }
-                     , show (length $ routeOptions cst))
+                pure (cst { routeOptions = routeOptions cst ++ [p'] }
+                     , (show (length $ routeOptions cst)
+                       , ", " <> (T.pack $ show $ length p') <> " steps away"))
             sendAll (cClient c) $ TE.encodeUtf8 $
-              T.concat ["[", T.pack n, "] ", roomS, ": ", item, " for ", price, "\r\n"]
+              T.concat ["[", T.pack n, "] "
+                       , roomS, " (", mapNames !! mapI, l, ")"
+                       , ": ", item, " for ", price, "\r\n"]
         SpeedWalk f t -> do
           cs <- readMVar (connState c)
           case (T.pack <$> f) <|> currentRoom cs of
@@ -187,7 +194,7 @@ c2s c leftover = do
               toRooms <- SQLite.query (dbConn c)
                 "select * from rooms where room_short like ?"
                 (SQLite.Only (concat ["%", t, "%"]))
-              let routes = rights
+              let routes = sortOn (\(_, _, p) -> length p) $ rights
                     [ (\p -> (showRoom from, showRoom to, p)) <$>
                     findPath (cPF c) (roomID from) (roomID to)
                     | from <- fromRooms, to <- toRooms ]
@@ -195,27 +202,24 @@ c2s c leftover = do
                 [] -> sendAll (cClient c) "No routes found\r\n"
                 [(_from, _to, p)] -> do
                   sendAll (cServer c) $ BS.concat
-                    ["alias _speedwalk "
-                    , TE.encodeUtf8 p
-                    , "\r\n"
-                    , "_speedwalk"
-                    , "\r\n"
-                    ]
+                    ["alias _speedwalk ", routeBS p, "\r\n_speedwalk\r\n"]
                 _ -> do
-                  forM_ (zip ([0..] :: [Int]) routes) $ \(n, (from, to, _)) ->
+                  forM_ (zip ([0..] :: [Int]) routes) $ \(n, (from, to, p)) ->
                     sendAll (cClient c) $
                     BS.concat ["[", BS.pack (show n), "] "
                               , maybe "" (const $ from <> " to ") f
-                              , to, "\r\n"]
+                              , to
+                              , " (", BS.pack (show $ length p), " steps)"
+                              , "\r\n"]
                   modifyMVar_ (connState c) $ \cst -> pure $
-                    cst { routeOptions = map (\(_,_,route) -> TE.encodeUtf8 route) routes }
+                    cst { routeOptions = map (\(_,_,route) -> route) routes }
                   pure ()
         RouteChoice n -> do
           routes <- routeOptions <$> readMVar (connState c)
           if length routes < n
             then sendAll (cClient c) "No such route"
             else sendAll (cServer c) $
-                 BS.concat ["alias _speedwalk ", routes !! n, "\r\n"
+                 BS.concat ["alias _speedwalk ", routeBS (routes !! n), "\r\n"
                            , "_speedwalk", "\r\n"]
       c2s c d
 
@@ -248,7 +252,7 @@ data Command = Telnet BS.ByteString
              | RouteChoice Int
   deriving (Show)
 
-data ConnState = CS { routeOptions :: [BS.ByteString]
+data ConnState = CS { routeOptions :: [[T.Text]]
                     , currentRoom :: Maybe RoomID
                     } deriving (Show)
 
