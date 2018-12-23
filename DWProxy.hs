@@ -26,6 +26,7 @@ import Data.Aeson (FromJSON, decodeStrict)
 import GHC.Generics (Generic)
 import Data.Monoid
 import Data.List
+import Data.Maybe
 
 
 type RoomID = T.Text
@@ -64,6 +65,15 @@ mapNames =
   , "Slippery Hollow", "House of Magic - Creel", "Special Areas"
   , "Skund Wolf Trail"
   ]
+
+elemAtIndex :: Int -> [a] -> Maybe a
+elemAtIndex 0 (x:_) = Just x
+elemAtIndex _ [] = Nothing
+elemAtIndex n (_:xs) = elemAtIndex (n - 1) xs
+
+mapNameByID :: Int -> T.Text
+mapNameByID n = fromMaybe "unknown" $ elemAtIndex (n - 1) mapNames
+  
 
 instance SQLite.FromRow Room where
   fromRow = Room <$> SQLite.field <*> SQLite.field <*> SQLite.field
@@ -130,7 +140,7 @@ mkClient = do
 showRoom :: Room -> BS.ByteString
 showRoom r = TE.encodeUtf8 $ T.concat
   [ roomShort r, " ("
-  , mapNames !! (roomMapID r - 1), ", "
+  , mapNameByID (roomMapID r), ", "
   , T.pack (show $ roomX r), "x", T.pack (show $ roomY r)
   , ")"]
 
@@ -180,7 +190,7 @@ c2s c leftover = do
                        , ", " <> (T.pack $ show $ length p') <> " steps away"))
             sendAll (cClient c) $ TE.encodeUtf8 $
               T.concat ["[", T.pack n, "] "
-                       , roomS, " (", mapNames !! mapI, l, ")"
+                       , roomS, " (", mapNameByID mapI, l, ")"
                        , ": ", item, " for ", price, "\r\n"]
         SpeedWalk f t -> do
           cs <- readMVar (connState c)
