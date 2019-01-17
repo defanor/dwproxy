@@ -8,7 +8,7 @@ import Data.Graph.Inductive.PatriciaTree (Gr)
 import Data.Graph.Inductive.Query.SP (sp)
 import qualified Data.HashMap.Strict as HM
 import qualified Database.SQLite.Simple as SQLite
-import Data.Maybe (mapMaybe, fromJust)
+import Data.Maybe (mapMaybe)
 import System.Environment (getArgs)
 import System.FilePath ((</>))
 import Network.Socket.ByteString (sendAll, recv)
@@ -105,9 +105,10 @@ pathFinder rooms exits =
 
 findPath :: PathFinder -> RoomID -> RoomID -> Either T.Text [T.Text]
 findPath pf from to =
-  let route = sp (fromJust $ HM.lookup from $ pfRoomToNode pf)
-              (fromJust $ HM.lookup to $ pfRoomToNode pf)
-              (pfGraph pf)
+  let route =  case ( HM.lookup from $ pfRoomToNode pf
+                    , HM.lookup to $ pfRoomToNode pf) of
+        (Just f, Just t) -> sp f t (pfGraph pf)
+        _ -> Nothing
   in case route of
     Just path@(_:_) -> Right $
       mapMaybe (flip HM.lookup (pfExitMap pf)) $
