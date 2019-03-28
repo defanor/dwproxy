@@ -3,9 +3,9 @@
 This is a client-agnostic proxy for the Discworld MUD, which adds new
 commands:
 
-- `speedwalk [from <location>] to <location>`: find routes, walk if
-  there's only one
-- `route <n>`: select a speedwalk route option
+- `speedwalk [from <location>] to <location>` or `sw <destination>`:
+  find routes, walk if there's only one
+- `<number>`: select a speedwalk route option
 - `shop <item>`: search shops by items they sell
 
 It uses the database from [Quow's Cow Bar and

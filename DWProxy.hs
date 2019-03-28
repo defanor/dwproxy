@@ -275,19 +275,18 @@ data Config = Config { cClient :: Socket
                      }
 
 pRouteChoice :: Parser Command
-pRouteChoice = do
-  _ <- "route "
-  d <- decimal
-  _ <- "\r\n"
-  pure $ RouteChoice d
+pRouteChoice = RouteChoice <$> decimal <* "\r\n"
 
 pSpeedWalk :: Parser Command
-pSpeedWalk = do
-  _ <- "speedwalk "
-  from <- ("from " *> (Just <$> manyTill (notChar '\255') " to "))
-    <|> ("to " *> pure Nothing)
-  to <- manyTill (notChar '\255') "\r\n"
-  pure $ SpeedWalk from to
+pSpeedWalk = full <|> short
+  where
+    short = "sw " *> (SpeedWalk Nothing <$> manyTill (notChar '\255') "\r\n")
+    full = do
+      _ <- "speedwalk "
+      from <- ("from " *> (Just <$> manyTill (notChar '\255') " to "))
+        <|> ("to " *> pure Nothing)
+      to <- manyTill (notChar '\255') "\r\n"
+      pure $ SpeedWalk from to
 
 pShopSearch :: Parser Command
 pShopSearch = ShopSearch <$> ("shop " *> manyTill (notChar '\255') "\r\n")
