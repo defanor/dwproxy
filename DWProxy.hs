@@ -203,8 +203,8 @@ c2s c leftover = do
                 "select * from rooms where room_short like ? or room_id = ?"
                 ((T.concat ["%", f', "%"]), f')
               toRooms <- SQLite.query (dbConn c)
-                "select * from rooms where room_short like ?"
-                (SQLite.Only (concat ["%", t, "%"]))
+                "select * from rooms where room_short like ? or room_id = ?"
+                ((concat ["%", t, "%"]), t)
               let routes = sortOn (\(_, _, p) -> length p) $ rights
                     [ (\p -> (showRoom from, showRoom to, p)) <$>
                     findPath (cPF c) (roomID from) (roomID to)
