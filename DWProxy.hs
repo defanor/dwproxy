@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -7,12 +9,12 @@ import Data.Graph.Inductive.Graph (mkGraph)
 import Data.Graph.Inductive.PatriciaTree (Gr)
 import Data.Graph.Inductive.Query.SP (sp)
 import qualified Data.HashMap.Strict as HM
-import qualified Database.SQLite.Simple as SQLite
-import Data.Maybe (mapMaybe)
+import Database.HDBC
+import Database.HDBC.Sqlite3 as Sqlite3
+import Data.Convertible
 import System.Environment (getArgs)
-import System.FilePath ((</>))
 import Network.Socket.ByteString (sendAll, recv)
-import Network.Socket hiding (send, recv)
+import Network.Socket
 import Control.Concurrent.Async (async, waitAnyCatchCancel)
 import Control.Exception as E
 import Control.Monad (when, forM_, forever)
@@ -24,7 +26,6 @@ import Data.Either (rights)
 import Control.Applicative
 import Data.Aeson (FromJSON, decodeStrict)
 import GHC.Generics (Generic)
-import Data.Monoid
 import Data.List
 import Data.Maybe
 
@@ -45,6 +46,13 @@ data Room = Room { roomID :: RoomID
 data Exit = Exit { exitFrom :: RoomID
                  , exitTo :: RoomID
                  , exitName :: T.Text }
+  deriving (Show, Eq)
+
+data ShopItem = ShopItem  { siRoomID :: RoomID
+                          , siMapID :: Int
+                          , siRoomShort :: T.Text
+                          , siItemName :: T.Text
+                          , siSalePrice :: T.Text }
   deriving (Show, Eq)
 
 mapNames :: [T.Text]
@@ -73,14 +81,38 @@ elemAtIndex n (_:xs) = elemAtIndex (n - 1) xs
 
 mapNameByID :: Int -> T.Text
 mapNameByID n = fromMaybe "unknown" $ elemAtIndex (n - 1) mapNames
-  
 
-instance SQLite.FromRow Room where
-  fromRow = Room <$> SQLite.field <*> SQLite.field <*> SQLite.field
-            <*> SQLite.field <*> SQLite.field <*> SQLite.field
 
-instance SQLite.FromRow Exit where
-  fromRow = Exit <$> SQLite.field <*> SQLite.field <*> SQLite.field
+instance Convertible [SqlValue] Room where
+  safeConvert [rid, rmid, rx, ry, rs, rt] = do
+    rid' <- safeFromSql rid
+    rmid' <- safeFromSql rmid
+    rx' <- safeFromSql rx
+    ry' <- safeFromSql ry
+    rs' <- safeFromSql rs
+    rt' <- safeFromSql rt
+    pure $ Room rid' rmid' rx' ry' rs' rt'
+  safeConvert other = Left $ ConvertError (show other) "[SqlValue]" "Room" "Unexpected list length"
+
+instance Convertible [SqlValue] Exit where
+  safeConvert [ef, et, en] = do
+    ef' <- safeFromSql ef
+    et' <- safeFromSql et
+    en' <- safeFromSql en
+    pure $ Exit ef' et' en'
+  safeConvert other = Left $ ConvertError (show other) "[SqlValue]" "Exit" "Unexpected list length"
+
+
+instance Convertible [SqlValue] ShopItem where
+  safeConvert [rid, mid, rs, iname, sprice] = do
+    rid' <- safeFromSql rid
+    mid' <- safeFromSql mid
+    rs' <- safeFromSql rs
+    iname' <- safeFromSql iname
+    sprice' <- safeFromSql sprice
+    pure $ ShopItem rid' mid' rs' iname' sprice'
+  safeConvert other = Left $ ConvertError (show other) "[SqlValue]" "ShopItem" "Unexpected list length"
+
 
 data PathFinder = PF { pfGraph :: Gr RoomID Int
                      , pfRoomToNode :: HM.HashMap RoomID Int
@@ -173,14 +205,14 @@ c2s c leftover = do
         Telnet other -> sendAll (cServer c) $ BS.cons '\255' other
         ShopSearch query -> do
           curRoom <- currentRoom <$> readMVar (connState c)
-          shops <- SQLite.query (dbConn c)
-            ("select room_id, map_id, room_short, item_name, sale_price from shop_items"
-             <> " natural inner join rooms where item_name like ?")
-            (SQLite.Only (concat ["%", query, "%"]))
-            :: IO [(RoomID, Int, T.Text, T.Text, T.Text)]
+          shops <- map convert
+                   <$> quickQuery' (dbConn c)
+                   ("select room_id, map_id, room_short, item_name, sale_price from shop_items"
+                    <> " natural inner join rooms where item_name like ?")
+                   [(toSql $ concat ["%", query, "%"])]
           -- cleanup the routes
           modifyMVar_ (connState c) $ \cst -> pure $ cst { routeOptions = [] }
-          forM_ shops $ \(roomI, mapI, roomS, item, price) -> do
+          forM_ shops $ \(ShopItem roomI mapI roomS item price) -> do
             let p = curRoom >>=
                     \cr -> either (const Nothing) Just (findPath (cPF c) cr roomI)
             (n, l) <- case p of
@@ -199,12 +231,12 @@ c2s c leftover = do
             Nothing -> sendAll (cClient c)
               "No source location is given, and none detected"
             Just f' -> do
-              fromRooms <- SQLite.query (dbConn c)
+              fromRooms <- map convert <$> quickQuery' (dbConn c)
                 "select * from rooms where room_short like ? or room_id = ?"
-                ((T.concat ["%", f', "%"]), f')
-              toRooms <- SQLite.query (dbConn c)
+                [(toSql $ T.concat ["%", f', "%"]), toSql f']
+              toRooms <- map convert <$> quickQuery' (dbConn c)
                 "select * from rooms where room_short like ? or room_id = ?"
-                ((concat ["%", t, "%"]), t)
+                [(toSql $ concat ["%", t, "%"]), toSql t]
               let routes = sortOn (\(_, _, p) -> length p) $ rights
                     [ (\p -> (showRoom from, showRoom to, p)) <$>
                     findPath (cPF c) (roomID from) (roomID to)
@@ -269,7 +301,7 @@ data ConnState = CS { routeOptions :: [[T.Text]]
 
 data Config = Config { cClient :: Socket
                      , cServer :: Socket
-                     , dbConn :: SQLite.Connection
+                     , dbConn :: Sqlite3.Connection
                      , connState :: MVar ConnState
                      , cPF :: PathFinder
                      }
@@ -319,13 +351,13 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [quow] ->
+    [quowmap] ->
       E.bracket
-      (SQLite.open $ quow </> "maps" </> "_quowmap_database.db")
-      (SQLite.close) $ \db -> do
-      rooms <- SQLite.query_ db
-        "select room_id, map_id, xpos, ypos, room_short, room_type from rooms"
-      exits <- SQLite.query_ db "select room_id, connect_id, exit from room_exits"
+      (connectSqlite3 quowmap)
+      (disconnect) $ \db -> do
+      rooms <- map convert <$> quickQuery' db
+        "select room_id, map_id, xpos, ypos, room_short, room_type from rooms" []
+      exits <- map convert <$> quickQuery' db "select room_id, connect_id, exit from room_exits" []
       let pf = pathFinder rooms exits
       mv <- newMVar $ CS [] Nothing
       E.bracket mkServer close $ \serverSocket -> forever $ do

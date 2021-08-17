@@ -11,6 +11,12 @@ commands:
 It uses the database from [Quow's Cow Bar and
 Minimap](http://quow.co.uk/minimap.php), which should be available,
 and the path to which should be provided as the first argument on
-invocation, e.g.: `dwproxy ~/discworld/quow_cowbar/`.
+invocation, e.g.: `dwproxy _quowmap_database.db`.
 
 The default port is 2000, `telnet localhost 2000` to connect.
+
+Can be built with either cabal (`cabal install`) or plain GHC on
+Debian 11, after installing the compiler and dependencies from system
+repositories (`ghc libghc-fgl-dev libghc-unordered-containers-dev
+libghc-network-dev libghc-async-dev libghc-attoparsec-dev
+libghc-aeson-dev libghc-hdbc-sqlite3-dev`).
