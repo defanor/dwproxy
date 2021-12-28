@@ -20,3 +20,9 @@ Debian 11, after installing the compiler and dependencies from system
 repositories (`ghc libghc-fgl-dev libghc-unordered-containers-dev
 libghc-network-dev libghc-async-dev libghc-attoparsec-dev
 libghc-aeson-dev libghc-hdbc-sqlite3-dev`).
+
+
+## Python version
+
+There's a Python version, dwproxy.py. It runs on Python 3, and doesn't
+have dependencies outside of the Python standard library.
