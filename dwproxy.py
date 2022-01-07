@@ -80,13 +80,14 @@ class TelnetHandler(socketserver.BaseRequestHandler):
     def process_cmd(self, s):
         """Processes client commands."""
 
-        # Return at once if we don't have room information
-        if not self.gmcp_data['room.info']['identifier']:
+        try:
+            cur_room_id = self.gmcp_data['room.info']['identifier']
+        except KeyError:
+            # Return if we don't have room information
             return False
 
         cur = self.server.dbcur
 
-        cur_room_id = self.gmcp_data['room.info']['identifier']
         origin_room = cur_room_id
 
         sw_match = sw_cmd.match(s)
