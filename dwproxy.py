@@ -41,7 +41,7 @@ exits = dict()
 
 def map_name(map_id):
     if map_id < len(map_names):
-        return map_names[map_id]
+        return map_names[map_id - 1]
     else:
         return "Unknown"
 
