@@ -74,8 +74,13 @@ class TelnetHandler(socketserver.BaseRequestHandler):
                     logging.debug("GMCP command received: %s %s",
                                   gmcp_cmd.decode('ascii'),
                                   json.loads(gmcp_json))
-                self.request.sendall(sb_data)
-            self.request.sendall(telnetlib.IAC + c + opt)
+                self.request.sendall(telnetlib.IAC + telnetlib.SB + self.sb_opt +
+                                     sb_data +
+                                     telnetlib.IAC + telnetlib.SE)
+            elif c == telnetlib.SB:
+                self.sb_opt = opt
+            else:
+                self.request.sendall(telnetlib.IAC + c + opt)
 
     def process_cmd(self, s):
         """Processes client commands."""
@@ -179,6 +184,7 @@ class TelnetHandler(socketserver.BaseRequestHandler):
         """Client connection handling."""
         logging.info("A new connection from %s", self.client_address)
         self.gmcp_data = {"room.info": {"identifier": None}}
+        self.sb_opt = None
         try:
             with telnetlib.Telnet(self.server.args.host,
                                   self.server.args.port) as tn:
