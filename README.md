@@ -16,10 +16,10 @@ invocation, e.g.: `dwproxy _quowmap_database.db`.
 The default port is 2000, `telnet localhost 2000` to connect.
 
 Can be built with either cabal (`cabal install`) or plain GHC on
-Debian 11, after installing the compiler and dependencies from system
-repositories (`ghc libghc-fgl-dev libghc-unordered-containers-dev
-libghc-network-dev libghc-async-dev libghc-attoparsec-dev
-libghc-aeson-dev libghc-hdbc-sqlite3-dev`).
+Debian 11 to 12, after installing the compiler and dependencies from
+system repositories (`ghc libghc-fgl-dev
+libghc-unordered-containers-dev libghc-network-dev libghc-async-dev
+libghc-attoparsec-dev libghc-aeson-dev libghc-hdbc-sqlite3-dev`).
 
 
 ## Python version
